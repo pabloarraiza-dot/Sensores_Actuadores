@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Desafío Contrarreloj: Sistemas Interactivos</title>
+  
+  <!-- Solo cargamos la librería base de p5.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: #0f172a;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      padding: 20px 10px;
+      overflow-x: hidden;
+    }
+
+    #game-wrapper {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      background: #1e293b;
+      padding: 16px;
+      border-radius: 16px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.4);
+      border: 1px solid #334155;
+    }
+
+    #canvas-container {
+      border-radius: 10px;
+      overflow: hidden;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background-color: #f8fafc;
+    }
+
+    canvas {
+      display: block;
+    }
+
+    .footer-help {
+      margin-top: 12px;
+      color: #94a3b8;
+      font-size: 0.85rem;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="game-wrapper">
+    <div id="canvas-container"></div>
+    <div class="footer-help">
+      💡 <strong>Instrucciones:</strong> Clic en un concepto (columna izquierda) y luego en su definición (columna derecha) antes de que finalicen los 90 segundos.
+    </div>
+  </div>
+
+  <script>
+    // 1. BANCO DE DATOS INTEGRADO (Contenidos de la planificación)
+    const DATA = [
+      { id: 1, concepto: "Sensor (Entrada)", definicion: "Dispositivo que captura magnitudes físicas del entorno y las traduce a datos digitales." },
+      { id: 2, concepto: "Actuador (Salida)", definicion: "Componente que ejecuta una acción física o respuesta observable (luces, motores, sonido)." },
+      { id: 3, concepto: "Ciclo E-P-S", definicion: "Arquitectura básica de sistemas interactivos: Entrada, Procesamiento lógico y Salida." },
+      { id: 4, concepto: "Umbral Numérico", definicion: "Límite cuantitativo calibrado frente a lecturas cambiantes para disparar una decisión." },
+      { id: 5, concepto: "Condicional Compuesta", definicion: "Estructura lógica que evalúa dos condiciones simultáneas mediante el operador lógico Y." },
+      { id: 6, concepto: "Depuración (Debugging)", definicion: "Estrategia de análisis para detectar, aislar y corregir fallos lógicos o lecturas ruidosas." },
+      { id: 7, concepto: "Bucle Continuo", definicion: "Estructura que repite indefinidamente la lectura de sensores y evaluación de reglas." },
+      { id: 8, concepto: "Acelerómetro", definicion: "Sensor integrado en micro:bit capaz de medir movimientos bruscos, inclinación y giros." },
+      { id: 9, concepto: "Pensamiento Computacional", definicion: "Proceso cognitivo de abstracción y descomposición aplicado a la resolución de problemas." },
+      { id: 10, concepto: "Metacognición / Semáforo", definicion: "Reflexión consciente sobre aciertos, atascos y reformulación de decisiones algorítmicas." }
+    ];
+
+    // Variables de juego
+    let itemsIzq = [];
+    let itemsDer = [];
+    let seleccionIzq = null;
+    let seleccionDer = null;
+    let paresResueltos = [];
+
+    const TIEMPO_LIMITE = 90;
+    const PENALIZACION_SEGUNDOS = 5;
+
+    let aciertos = 0;
+    let fallos = 0;
+    let tiempoRestante = TIEMPO_LIMITE;
+    let tiempoInicio = 0;
+    let tiempoDescontado = 0;
+    let juegoTerminado = false;
+    let victoria = false;
+
+    let mensajePenalizacion = "";
+    let tiempoFeedbackPenalizacion = 0;
+
+    // Dimensiones
+    const CANVAS_W = 960;
+    const CANVAS_H = 780;
+    const CARD_WIDTH = 380;
+    const CARD_HEIGHT = 54;
+    const COL_IZQ_X = 50;
+    const COL_DER_X = 530;
+    const OFFSET_Y = 105;
+    const GAP_Y = 12;
+
+    // 2. AUDIO NATIVO DEL NAVEGADOR (100% compatible y sin librerías externas)
+    let audioCtx = null;
+
+    function playBeep(freq, type, duration) {
+      try {
+        if (!audioCtx) {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (audioCtx.state === 'suspended') {
+          audioCtx.resume();
+        }
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + duration);
+      } catch (e) {
+        // En caso de bloqueo de audio continúa el juego
+      }
+    }
+
+    function sonarAcierto() {
+      playBeep(587, 'triangle', 0.12);
+      setTimeout(() => playBeep(880, 'triangle', 0.2), 90);
+    }
+
+    function sonarFallo() {
+      playBeep(160, 'sawtooth', 0.25);
+    }
+
+    function sonarFin() {
+      playBeep(120, 'sawtooth', 0.6);
+    }
+
+    // 3. CICLO DE VIDA DE P5.JS
+    function setup() {
+      const cnv = createCanvas(CANVAS_W, CANVAS_H);
+      cnv.parent('canvas-container'); // Inserción directa en el DOM
+      textFont('Helvetica, Arial, sans-serif');
+      iniciarJuego();
+    }
+
+    function iniciarJuego() {
+      aciertos = 0;
+      fallos = 0;
+      tiempoDescontado = 0;
+      tiempoRestante = TIEMPO_LIMITE;
+      paresResueltos = [];
+      seleccionIzq = null;
+      seleccionDer = null;
+      juegoTerminado = false;
+      victoria = false;
+      mensajePenalizacion = "";
+      tiempoInicio = millis();
+
+      let copiaIzq = DATA.map(d => ({ id: d.id, texto: d.concepto }));
+      let copiaDer = DATA.map(d => ({ id: d.id, texto: d.definicion }));
+
+      copiaIzq = shuffle(copiaIzq);
+      copiaDer = shuffle(copiaDer);
+
+      itemsIzq = copiaIzq.map((item, index) => ({
+        ...item,
+        x: COL_IZQ_X,
+        y: OFFSET_Y + index * (CARD_HEIGHT + GAP_Y),
+        w: CARD_WIDTH,
+        h: CARD_HEIGHT,
+        columna: 'izq',
+        resuelto: false
+      }));
+
+      itemsDer = copiaDer.map((item, index) => ({
+        ...item,
+        x: COL_DER_X,
+        y: OFFSET_Y + index * (CARD_HEIGHT + GAP_Y),
+        w: CARD_WIDTH,
+        h: CARD_HEIGHT,
+        columna: 'der',
+        resuelto: false
+      }));
+    }
+
+    function draw() {
+      background(245, 247, 250);
+
+      if (!juegoTerminado) {
+        let transcurrido = floor((millis() - tiempoInicio) / 1000);
+        tiempoRestante = TIEMPO_LIMITE - transcurrido - tiempoDescontado;
+
+        if (tiempoRestante <= 0) {
+          tiempoRestante = 0;
+          juegoTerminado = true;
+          victoria = false;
+          sonarFin();
+        }
+      }
+
+      dibujarEncabezado();
+      dibujarLineasResueltas();
+      dibujarLineaEnProgreso();
+
+      itemsIzq.forEach(item => dibujarMosaico(item, seleccionIzq === item));
+      itemsDer.forEach(item => dibujarMosaico(item, seleccionDer === item));
+
+      if (juegoTerminado) {
+        dibujarPantallaFinal();
+      }
+    }
+
+    function dibujarEncabezado() {
+      fill(30, 41, 59);
+      noStroke();
+      textAlign(LEFT, CENTER);
+      textSize(20);
+      textStyle(BOLD);
+      text("Desafío Contrarreloj: 90 Segundos", 50, 40);
+
+      let minutos = nf(floor(tiempoRestante / 60), 2);
+      let segundos = nf(tiempoRestante % 60, 2);
+
+      textAlign(RIGHT, CENTER);
+      textSize(14);
+      textStyle(NORMAL);
+      fill(71, 85, 105);
+      text(`Aciertos: ${aciertos}/${DATA.length}   |   Fallos: ${fallos}`, width - 180, 40);
+
+      if (tiempoRestante <= 15 && !juegoTerminado) {
+        fill(220, 38, 38);
+        textStyle(BOLD);
+      } else {
+        fill(15, 23, 42);
+        textStyle(BOLD);
+      }
+      textSize(18);
+      text(`⏱ ${minutos}:${segundos}`, width - 50, 40);
+
+      if (millis() < tiempoFeedbackPenalizacion) {
+        push();
+        fill(220, 38, 38);
+        textSize(13);
+        textStyle(BOLD);
+        textAlign(RIGHT, CENTER);
+        text(mensajePenalizacion, width - 50, 64);
+        pop();
+      }
+
+      stroke(226, 232, 240);
+      strokeWeight(2);
+      line(50, 80, width - 50, 80);
+    }
+
+    function dibujarMosaico(item, estaSeleccionado) {
+      push();
+      rectMode(CORNER);
+      strokeWeight(2);
+
+      if (item.resuelto) {
+        fill(220, 252, 231);
+        stroke(34, 197, 94);
+      } else if (estaSeleccionado) {
+        fill(224, 231, 255);
+        stroke(79, 70, 229);
+      } else if (estaMouseEncima(item)) {
+        fill(241, 245, 249);
+        stroke(148, 163, 184);
+      } else {
+        fill(255);
+        stroke(203, 213, 225);
+      }
+
+      rect(item.x, item.y, item.w, item.h, 6);
+
+      noStroke();
+      fill(item.resuelto ? color(22, 101, 52) : color(30, 41, 59));
+      textAlign(CENTER, CENTER);
+      textSize(item.columna === 'izq' ? 13 : 11.5);
+      textStyle(item.columna === 'izq' ? BOLD : NORMAL);
+      
+      text(item.texto, item.x + 10, item.y + 4, item.w - 20, item.h - 8);
+      pop();
+    }
+
+    function dibujarLineasResueltas() {
+      push();
+      stroke(34, 197, 94, 180);
+      strokeWeight(2.5);
+      paresResueltos.forEach(par => {
+        let x1 = par.izq.x + par.izq.w;
+        let y1 = par.izq.y + par.izq.h / 2;
+        let x2 = par.der.x;
+        let y2 = par.der.y + par.der.h / 2;
+        line(x1, y1, x2, y2);
+      });
+      pop();
+    }
+
+    function dibujarLineaEnProgreso() {
+      if (juegoTerminado) return;
+      push();
+      stroke(99, 102, 241, 160);
+      strokeWeight(2);
+      drawingContext.setLineDash([5, 5]);
+
+      if (seleccionIzq && !seleccionDer) {
+        let x1 = seleccionIzq.x + seleccionIzq.w;
+        let y1 = seleccionIzq.y + seleccionIzq.h / 2;
+        line(x1, y1, mouseX, mouseY);
+      } else if (seleccionDer && !seleccionIzq) {
+        let x1 = seleccionDer.x;
+        let y1 = seleccionDer.y + seleccionDer.h / 2;
+        line(x1, y1, mouseX, mouseY);
+      }
+      pop();
+    }
+
+    function mousePressed() {
+      if (juegoTerminado) {
+        let btnX = width / 2 - 80;
+        let btnY = height / 2 + 55;
+        if (mouseX >= btnX && mouseX <= btnX + 160 && mouseY >= btnY && mouseY <= btnY + 45) {
+          iniciarJuego();
+        }
+        return;
+      }
+
+      for (let item of itemsIzq) {
+        if (!item.resuelto && estaMouseEncima(item)) {
+          seleccionIzq = (seleccionIzq === item) ? null : item;
+          evaluarEmparejamiento();
+          return;
+        }
+      }
+
+      for (let item of itemsDer) {
+        if (!item.resuelto && estaMouseEncima(item)) {
+          seleccionDer = (seleccionDer === item) ? null : item;
+          evaluarEmparejamiento();
+          return;
+        }
+      }
+    }
+
+    function evaluarEmparejamiento() {
+      if (seleccionIzq && seleccionDer) {
+        if (seleccionIzq.id === seleccionDer.id) {
+          sonarAcierto();
+          seleccionIzq.resuelto = true;
+          seleccionDer.resuelto = true;
+          paresResueltos.push({ izq: seleccionIzq, der: seleccionDer });
+          aciertos++;
+
+          seleccionIzq = null;
+          seleccionDer = null;
+
+          if (aciertos === DATA.length) {
+            victoria = true;
+            juegoTerminado = true;
+          }
+        } else {
+          sonarFallo();
+          fallos++;
+          tiempoDescontado += PENALIZACION_SEGUNDOS;
+
+          mensajePenalizacion = `¡Error! -${PENALIZACION_SEGUNDOS}s`;
+          tiempoFeedbackPenalizacion = millis() + 1200;
+
+          seleccionIzq = null;
+          seleccionDer = null;
+        }
+      }
+    }
+
+    function estaMouseEncima(item) {
+      return mouseX >= item.x && mouseX <= item.x + item.w &&
+             mouseY >= item.y && mouseY <= item.y + item.h;
+    }
+
+    function dibujarPantallaFinal() {
+      push();
+      fill(15, 23, 42, 235);
+      rect(0, 0, width, height);
+
+      textAlign(CENTER, CENTER);
+      textStyle(BOLD);
+
+      if (victoria) {
+        fill(74, 222, 128);
+        textSize(32);
+        text("¡Excelente! Desafío Superado", width / 2, height / 2 - 50);
+
+        let tiempoEmpleado = TIEMPO_LIMITE - tiempoRestante;
+        fill(203, 213, 225);
+        textSize(16);
+        textStyle(NORMAL);
+        text(`Completaste los 10 pares en ${tiempoEmpleado} segundos.`, width / 2, height / 2 - 10);
+        text(`Aciertos: 10/10  |  Errores cometidos: ${fallos}`, width / 2, height / 2 + 18);
+      } else {
+        fill(248, 113, 113);
+        textSize(32);
+        text("¡Tiempo Agotado!", width / 2, height / 2 - 50);
+
+        fill(203, 213, 225);
+        textSize(16);
+        textStyle(NORMAL);
+        text(`Lograste conectar ${aciertos} de ${DATA.length} conceptos.`, width / 2, height / 2 - 10);
+        text(`Intenta nuevamente optimizando tu velocidad y precisión.`, width / 2, height / 2 + 18);
+      }
+
+      let btnX = width / 2 - 80;
+      let btnY = height / 2 + 55;
+      let sobreBoton = mouseX >= btnX && mouseX <= btnX + 160 && mouseY >= btnY && mouseY <= btnY + 45;
+
+      fill(sobreBoton ? color(67, 56, 202) : color(79, 70, 229));
+      stroke(255);
+      strokeWeight(1);
+      rect(btnX, btnY, 160, 45, 8);
+
+      fill(255);
+      noStroke();
+      textSize(15);
+      textStyle(BOLD);
+      text("Reintentar", width / 2, btnY + 22);
+      pop();
+    }
+  </script>
+</body>
+</html>
